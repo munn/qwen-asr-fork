@@ -336,7 +336,11 @@ class Qwen3ASRThinkerConfig(PretrainedConfig):
         initializer_range=0.02,
         **kwargs,
     ):
-        super().__init__(**kwargs)
+        # transformers v5+ note: PretrainedConfig.__init__ runs `@strict`-powered
+        # validators (e.g. validate_token_ids) which call self.get_text_config().
+        # That fallback path looks up self.text_config (base_config_key); we MUST
+        # set sub_configs BEFORE super().__init__ to avoid AttributeError.
+        # See multilang spec 003 Phase 6 Step 1.B R4 fork 二次深化 audit.
         self.user_token_id = user_token_id
         self.audio_start_token_id = audio_start_token_id
         self.initializer_range = initializer_range
@@ -353,6 +357,8 @@ class Qwen3ASRThinkerConfig(PretrainedConfig):
             text_config = Qwen3ASRTextConfig()
         self.text_config = text_config
         self.audio_token_id = audio_token_id
+
+        super().__init__(**kwargs)
 
 
 class Qwen3ASRConfig(PretrainedConfig):
@@ -400,12 +406,18 @@ class Qwen3ASRConfig(PretrainedConfig):
         support_languages=None,
         **kwargs,
     ):
-        super().__init__(**kwargs)
+        # transformers v5+ note: PretrainedConfig.__init__ runs `@strict`-powered
+        # validators (e.g. validate_token_ids) which call self.get_text_config()
+        # — overridden below to delegate to self.thinker_config.get_text_config().
+        # We MUST set self.thinker_config BEFORE super().__init__ to avoid
+        # AttributeError: 'Qwen3ASRConfig' object has no attribute 'thinker_config'.
+        # See multilang spec 003 Phase 6 Step 1.B R4 fork 二次深化 audit.
         if thinker_config is None:
             thinker_config = {}
 
         self.thinker_config = Qwen3ASRThinkerConfig(**thinker_config)
         self.support_languages = support_languages
+        super().__init__(**kwargs)
 
     def get_text_config(self, decoder=False) -> "PretrainedConfig":
         """
