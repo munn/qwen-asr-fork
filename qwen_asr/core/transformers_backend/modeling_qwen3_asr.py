@@ -1330,7 +1330,14 @@ class Qwen3ASRThinkerForConditionalGeneration(Qwen3ASRPreTrainedModelForConditio
 
         model_inputs["position_ids"] = None
 
-        if cache_position[0] != 0:
+        # spec 005 ml47 T013 R2 path B class 5 fix: transformers v5
+        # generation flow at the prefill stage may pass ``cache_position=None``
+        # (v4 always passed a tensor; v5's ``_prefill`` route can skip it).
+        # ``cache_position[0] != 0`` semantics = "not the first prefill step,
+        # reset input_features so subsequent decode steps don't re-feed audio
+        # tokens". When ``cache_position is None``, we are at prefill — keep
+        # input_features as-is. None check preserves v4 behavior on v5 stack.
+        if cache_position is not None and cache_position[0] != 0:
             model_inputs["input_features"] = None
 
         return model_inputs
