@@ -791,13 +791,60 @@ class Qwen3ASRThinkerTextRotaryEmbedding(nn.Module):
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+        # spec 005 R2 path B fork (multilang ml47): transformers v5 ROPE_INIT_FUNCTIONS
+        # no longer carries the 'default' key — only {linear, dynamic, yarn, longrope,
+        # llama3, proportional}. Direct lookup raises KeyError('default') on model load.
+        # Mirror v5 native Qwen3RotaryEmbedding pattern
+        # (transformers/models/qwen3/modeling_qwen3.py:96-100): local
+        # compute_default_rope_parameters() for 'default', table lookup for others.
+        if self.rope_type == "default":
+            self.rope_init_fn = self.compute_default_rope_parameters
+        else:
+            self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
 
         inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.original_inv_freq = self.inv_freq
 
         self.mrope_section = config.rope_scaling.get("mrope_section", [24, 20, 20])
+
+    @staticmethod
+    def compute_default_rope_parameters(
+        config,
+        device=None,
+        seq_len=None,
+    ):
+        """Original RoPE inverse frequencies — spec 005 R2 path B fork
+        compatibility shim for transformers v5 ROPE_INIT_FUNCTIONS no longer
+        carrying 'default'. Mirrors
+        ``transformers/models/qwen3/modeling_qwen3.py``
+        ``Qwen3RotaryEmbedding.compute_default_rope_parameters`` but reads
+        ``rope_theta`` from the Qwen3ASR fork config schema (top-level
+        ``config.rope_theta``) rather than v5 native
+        ``config.rope_parameters['rope_theta']``. Falls back to 10000.0 if
+        neither is present (matches v4 default).
+        """
+        if hasattr(config, "rope_parameters") and isinstance(
+            getattr(config, "rope_parameters", None), dict
+        ) and "rope_theta" in config.rope_parameters:
+            base = config.rope_parameters["rope_theta"]
+        else:
+            base = getattr(config, "rope_theta", 10000.0)
+        dim = (
+            getattr(config, "head_dim", None)
+            or config.hidden_size // config.num_attention_heads
+        )
+        attention_factor = 1.0  # Unused in 'default' RoPE
+        inv_freq = 1.0 / (
+            base
+            ** (
+                torch.arange(0, dim, 2, dtype=torch.int64).to(
+                    device=device, dtype=torch.float
+                )
+                / dim
+            )
+        )
+        return inv_freq, attention_factor
 
     def apply_interleaved_mrope(self, freqs, mrope_section):
         """Apply interleaved MRoPE to 3D rotary embeddings.

@@ -334,6 +334,7 @@ class Qwen3ASRThinkerConfig(PretrainedConfig):
         audio_start_token_id=151647,
         user_token_id=872,
         initializer_range=0.02,
+        pad_token_id=None,
         **kwargs,
     ):
         # transformers v5+ note: PretrainedConfig.__init__ runs `@strict`-powered
@@ -357,6 +358,20 @@ class Qwen3ASRThinkerConfig(PretrainedConfig):
             text_config = Qwen3ASRTextConfig()
         self.text_config = text_config
         self.audio_token_id = audio_token_id
+
+        # spec 005 R2 path B fix (multilang ml47): v5 PretrainedConfig no
+        # longer auto-sets ``self.pad_token_id`` from kwargs.pop — instead
+        # the @strict validator path expects the attribute already present
+        # on the instance. Downstream model code reads
+        # ``self.config.pad_token_id`` (Qwen3ASRThinkerForConditionalGeneration
+        # __init__:1136 — self.pad_token_id = self.config.pad_token_id ...) so
+        # we MUST set it explicitly here before super(). Cascade default
+        # from text_config when the caller doesn't override (the underlying
+        # ``Qwen3ASRTextConfig`` carries pad_token_id for the LM head).
+        if pad_token_id is not None:
+            self.pad_token_id = pad_token_id
+        else:
+            self.pad_token_id = getattr(self.text_config, "pad_token_id", None)
 
         super().__init__(**kwargs)
 
